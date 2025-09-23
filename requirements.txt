@@ -11,3 +11,8 @@ flask-cors
 python-logging-loki
 python-dotenv
 tensorboard
+scikit-learn
+pillow
+beautifulsoup4
+numpy
+colorsys
