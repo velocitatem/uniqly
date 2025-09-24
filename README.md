@@ -7,38 +7,33 @@ A system for generating unique, stochastic and diverse outputs from LLMs while e
 Large Language Models suffer from repetitive outputs, missing the long tail of possibilities. Teams waste money on duplicates, manual deduplication, and shallow test coverage. **Uniqly** solves this by maximizing unique, relevant outputs per dollar spent.
 
 ## How It Works
+<h3>Problem Formulation</h3>
+<p>We have a base model <img src="https://i.upmath.me/svg/F" alt="F" /> that maps input <img src="https://i.upmath.me/svg/X" alt="X" /> to a distribution over output space <img src="https://i.upmath.me/svg/Y" alt="Y" /> with probability mass function <img src="https://i.upmath.me/svg/p(y%5Cmid%20x)" alt="p(y\mid x)" />. The model $F$ is stochastic and black-box.</p>
+<p>At each step <img src="https://i.upmath.me/svg/t" alt="t" />, we want to select a subset <img src="https://i.upmath.me/svg/Y_t%3D%5C%7By%5E%7B(t)%7D_1%2C%5Cdots%2Cy%5E%7B(t)%7D_%7Bk_t%7D%5C%7D" alt="Y_t=\{y^{(t)}_1,\dots,y^{(t)}_{k_t}\}" /> with:</p>
+<ul>
+<li><strong>No repeats</strong> across all previous steps: <img src="https://i.upmath.me/svg/Y_t%20%5Ccap%20%5Cbigcup_%7Bi%3Ct%7D%20Y_i%3D%5Cvarnothing" alt="Y_t \cap \bigcup_{i&lt;t} Y_i=\varnothing" /></li>
+<li><strong>High novelty</strong> and growing coverage of the output space <img src="https://i.upmath.me/svg/Y" alt="Y" /></li>
+<li><strong>Submodular coverage</strong> maximization subject to non-repetition constraints</li>
+</ul>
+<h3>Objective Function</h3>
+<p>We maximize a submodular coverage function:</p>
+<p align="center"><img align="center" src="https://i.upmath.me/svg/%5Cmax_%7BY_%7B1%3AT%7D%7D%20%5C%3B%20%5Cmathcal%7BC%7D%5C!%5Cleft(%5Cbigcup_%7Bt%3D1%7D%5ET%20Y_t%5Cright)%20%5Cquad%5Ctext%7Bsubject%20to%7D%5Cquad%20Y_t%20%5Ccap%20%5Cbigcup_%7Bi%3Ct%7D%20Y_i%3D%5Cvarnothing" alt="\max_{Y_{1:T}} \; \mathcal{C}\!\left(\bigcup_{t=1}^T Y_t\right) \quad\text{subject to}\quad Y_t \cap \bigcup_{i&lt;t} Y_i=\varnothing" /></p>
+<p>Where $\mathcal{C}$ represents cluster coverage, facility location, or rarity-weighted coverage bins.</p>
+<h3>Implementation Approach</h3>
+<p><strong>Current Implementation</strong> (OpenAI API):</p>
+<ol>
+<li><strong>High-Temperature Sampling</strong>: Use standard API with <code>temperature=1.2</code> and <code>top_p=0.95</code> for diversity</li>
+<li><strong>Multi-Round Generation</strong>: Generate multiple batches with different seeds for breadth</li>
+<li><strong>Hard Deduplication</strong>: Filter candidates using $\mathbf{1}[y\notin H]$ with canonicalized string matching</li>
+<li><strong>MMR Reranking</strong>: Apply post-generation scoring:
+<img src="https://i.upmath.me/svg/%5Ctext%7Bscore%7D%20%3D%20%5Clambda%20%5Ccdot%20%5Ctext%7Brelevance%7D%20-%20(1-%5Clambda)%20%5Ccdot%20%5Ctext%7Bsimilarity%5C_to%5C_history%7D%20%2B%20%5Calpha%20%5Ccdot%20%5Ctext%7Blogprob%7D%20%2B%20%5Cbeta%20%5Ccdot%20%5Ctext%7Brarity%7D" alt="\text{score} = \lambda \cdot \text{relevance} - (1-\lambda) \cdot \text{similarity\_to\_history} + \alpha \cdot \text{logprob} + \beta \cdot \text{rarity}" /></li>
+<li><strong>Top-k Selection</strong>: Select highest scoring unique candidates</li>
+</ol>
+<p><strong>Future Implementation</strong> (Direct Sampling Control):
+For providers supporting custom sampling, we could implement the ideal <strong>time-varying reweighted distribution</strong>:</p>
+<p align="center"><img align="center" src="https://i.upmath.me/svg/%5Cpi_t(y)%20%5Cpropto%20%5Cmathbf%7B1%7D%5By%5Cnotin%20H%5D%20%5Ccdot%20p(y%5Cmid%20x)%5E%7B%5Calpha_t%7D%20%5Ccdot%20%5Cexp%5C!%5Cleft(-%5Clambda_t%20%5Cmax_%7Bs%5Cin%20H%7D%5Ctext%7Bsim%7D(y%2Cs)%20%2B%20%5Cbeta_t%20r_%7B%5Ctext%7Brare%7D%7D(y)%5Cright)" alt="\pi_t(y) \propto \mathbf{1}[y\notin H] \cdot p(y\mid x)^{\alpha_t} \cdot \exp\!\left(-\lambda_t \max_{s\in H}\text{sim}(y,s) + \beta_t r_{\text{rare}}(y)\right)" /></p>
+<p>Then sample $k_t$ items <strong>without replacement</strong> using Gumbel-Top-k or k-DPP.</p>
 
-### Problem Formulation
-We have a base model $F$ that maps input $X$ to a distribution over output space $Y$ with probability mass function $p(y\mid x)$. The model $F$ is stochastic and black-box.
-
-At each step $t$, we want to select a subset $Y_t=\{y^{(t)}_1,\dots,y^{(t)}_{k_t}\}$ with:
-- **No repeats** across all previous steps: $Y_t \cap \bigcup_{i<t} Y_i=\varnothing$
-- **High novelty** and growing coverage of the output space $Y$
-- **Submodular coverage** maximization subject to non-repetition constraints
-
-### Objective Function
-We maximize a submodular coverage function:
-
-$$\max_{Y_{1:T}} \; \mathcal{C}\!\left(\bigcup_{t=1}^T Y_t\right) \quad\text{subject to}\quad Y_t \cap \bigcup_{i<t} Y_i=\varnothing$$
-
-Where $\mathcal{C}$ represents cluster coverage, facility location, or rarity-weighted coverage bins.
-
-### Implementation Approach
-
-**Current Implementation** (OpenAI API):
-1. **High-Temperature Sampling**: Use standard API with `temperature=1.2` and `top_p=0.95` for diversity
-2. **Multi-Round Generation**: Generate multiple batches with different seeds for breadth
-3. **Hard Deduplication**: Filter candidates using $\mathbf{1}[y\notin H]$ with canonicalized string matching
-4. **MMR Reranking**: Apply post-generation scoring:
-   $$\text{score} = \lambda \cdot \text{relevance} - (1-\lambda) \cdot \text{similarity\_to\_history} + \alpha \cdot \text{logprob} + \beta \cdot \text{rarity}$$
-5. **Top-k Selection**: Select highest scoring unique candidates
-
-**Future Implementation** (Direct Sampling Control):
-For providers supporting custom sampling, we could implement the ideal **time-varying reweighted distribution**:
-
-$$\pi_t(y) \propto \mathbf{1}[y\notin H] \cdot p(y\mid x)^{\alpha_t} \cdot \exp\!\left(-\lambda_t \max_{s\in H}\text{sim}(y,s) + \beta_t r_{\text{rare}}(y)\right)$$
-
-Then sample $k_t$ items **without replacement** using Gumbel-Top-k or k-DPP.
 
 ### Core Algorithm
 - **Multi-Round Generation**: Generate diverse candidate batches with varying seeds
