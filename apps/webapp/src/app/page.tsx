@@ -1,60 +1,99 @@
 "use client";
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
-interface SuggestionsResponse {
-  suggestions: string[];
-  count: number;
-  context_id: string;
-  remaining_in_queue: number;
+interface ContextResponse {
+  slug: string;
+  context: string;
+  url: string;
+  created_at: number;
+  active: boolean;
 }
 
 export default function Home() {
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [context, setContext] = useState('');
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
 
-  useEffect(() => {
-    const fetchSuggestions = async () => {
-      try {
-        const response = await fetch('/api/suggestions');
-        if (!response.ok) {
-          throw new Error('Failed to fetch suggestions');
-        }
-        const data: SuggestionsResponse = await response.json();
-        setSuggestions(data.suggestions);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'An error occurred');
-      } finally {
-        setLoading(false);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!context.trim()) {
+      setError('Please enter a context');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/contexts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          context: context.trim(),
+          generation_interval: 60
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create context');
       }
-    };
 
-    fetchSuggestions();
-  }, []);
+      const data: ContextResponse = await response.json();
+
+      // Redirect to the new context page
+      router.push(`/${data.slug}`);
+
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center p-8">
-      <div className="text-center max-w-4xl">
-        {loading && <p className="text-lg">Loading suggestions...</p>}
+      <div className="max-w-2xl w-full">
+        <div className="text-center mb-8">
+          <p className="text-xl text-gray-600">
+            Create personalized agentic stream. Enter any context and subscribe.
+          </p>
+        </div>
 
-        {error && (
-          <p className="text-lg text-red-600">Error: {error}</p>
-        )}
-
-        {!loading && !error && suggestions.length > 0 && (
+        <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            {suggestions.map((suggestion, index) => (
-              <p key={index} className="text-lg mb-4">
-                {suggestion}
-              </p>
-            ))}
+            <input
+              type="text"
+              id="context"
+              value={context}
+              onChange={(e) => setContext(e.target.value)}
+              placeholder="e.g. lactose-free snack ideas, creative writing prompts for sci-fi stories"
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              disabled={loading}
+            />
           </div>
-        )}
 
-        {!loading && !error && suggestions.length === 0 && (
-          <p className="text-lg">No suggestions available</p>
-        )}
+
+          {error && (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-red-600">{error}</p>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading || !context.trim()}
+            className="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+          >
+            {loading ? 'Creating Your Stream...' : 'Create Suggestion Stream'}
+          </button>
+        </form>
+
       </div>
     </div>
   );

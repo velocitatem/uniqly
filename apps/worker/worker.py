@@ -7,6 +7,9 @@ from typing import List
 from celery import Celery
 import redis
 from llms import generate_contextual_suggestions
+from utils import get_context_metadata, get_all_contexts, update_context_stats
+from dotenv import load_dotenv
+load_dotenv()
 
 # Redis connection
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -17,22 +20,23 @@ r = redis.from_url(redis_url)
 CONTEXT_X = os.getenv("CONTEXT_X", "creative writing prompts for sci-fi stories")
 CONTEXT_ID = os.getenv("CONTEXT_ID", "default")
 MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "1000"))
-GENERATION_INTERVAL = int(os.getenv("GENERATION_INTERVAL", "60"))
+GENERATION_INTERVAL = int(os.getenv("GENERATION_INTERVAL", "360"))
 LLM_SCRIPT_PATH = os.getenv("LLM_SCRIPT_PATH", "/app/src/llm/main.py")
+print("Worker started, waiting for tasks... at interval:", GENERATION_INTERVAL)
 
 @app.task
-def generate_suggestions():
-    """Generate suggestions using local llms.py module and store in Redis"""
+def generate_suggestions_for_context(slug: str, context: str):
+    """Generate suggestions for a specific context using slug"""
     try:
         # Generate suggestions directly using imported function
-        suggestions = generate_contextual_suggestions(CONTEXT_X)
+        suggestions = generate_contextual_suggestions(context)
 
         if not suggestions:
-            return {"message": "No suggestions generated"}
+            return {"message": "No suggestions generated", "context_id": slug}
 
-        # Store in Redis
-        queue_key = f"suggestions:queue:{CONTEXT_ID}"
-        all_key = f"suggestions:all:{CONTEXT_ID}"
+        # Store in Redis using slug as context_id
+        queue_key = f"suggestions:queue:{slug}"
+        all_key = f"suggestions:all:{slug}"
 
         # Add to FIFO queue (with size limit)
         pipe = r.pipeline()
@@ -44,16 +48,39 @@ def generate_suggestions():
         pipe.ltrim(queue_key, 0, MAX_QUEUE_SIZE - 1)
         pipe.execute()
 
-        # Update generation stats
-        stats_key = f"stats:{CONTEXT_ID}"
-        r.hincrby(stats_key, "total_generated", len(suggestions))
-        r.hset(stats_key, "last_generation", int(time.time()))
+        # Update context stats
+        update_context_stats(r, slug, len(suggestions), int(time.time()))
 
-        print(f"Generated {len(suggestions)} suggestions for context '{CONTEXT_X}'")
+        print(f"Generated {len(suggestions)} suggestions for context '{context}' (slug: {slug})")
         return {
             "generated": len(suggestions),
+            "context_id": slug,
             "queue_size": r.llen(queue_key),
             "total_unique": r.scard(all_key)
+        }
+
+    except Exception as e:
+        print(f"Error generating suggestions for {slug}: {str(e)}")
+        return {"error": str(e), "context_id": slug}
+
+@app.task
+def generate_suggestions():
+    """Legacy task - generates for all active contexts"""
+    try:
+        contexts = get_all_contexts(r)
+        results = []
+
+        for slug, context_data in contexts.items():
+            try:
+                result = generate_suggestions_for_context(slug, context_data['context'])
+                results.append(result)
+            except Exception as e:
+                print(f"Error generating for context {slug}: {e}")
+                results.append({"error": str(e), "context_id": slug})
+
+        return {
+            "message": f"Generated suggestions for {len(results)} contexts",
+            "results": results
         }
 
     except Exception as e:
@@ -78,21 +105,33 @@ def get_queue_status():
 
 @app.task
 def cleanup_old_suggestions(max_age_days=7):
-    """Cleanup old suggestions to prevent memory issues"""
-    # This could be enhanced to track suggestion timestamps
-    # For now, just ensure we don't exceed limits
-    all_key = f"suggestions:all:{CONTEXT_ID}"
-    total_count = r.scard(all_key)
+    """Cleanup old suggestions to prevent memory issues for all contexts"""
+    try:
+        contexts = get_all_contexts(r)
+        cleanup_results = {}
 
-    if total_count > MAX_QUEUE_SIZE * 2:
-        # Remove random elements to get back to reasonable size
-        excess = total_count - MAX_QUEUE_SIZE
-        for _ in range(excess):
-            r.spop(all_key)
+        for slug in contexts.keys():
+            all_key = f"suggestions:all:{slug}"
+            total_count = r.scard(all_key)
 
-        return {"cleaned": excess, "remaining": r.scard(all_key)}
+            if total_count > MAX_QUEUE_SIZE * 2:
+                # Remove random elements to get back to reasonable size
+                excess = total_count - MAX_QUEUE_SIZE
+                for _ in range(excess):
+                    r.spop(all_key)
 
-    return {"cleaned": 0, "total": total_count}
+                cleanup_results[slug] = {"cleaned": excess, "remaining": r.scard(all_key)}
+            else:
+                cleanup_results[slug] = {"cleaned": 0, "total": total_count}
+
+        return {
+            "message": f"Cleaned up {len(cleanup_results)} contexts",
+            "results": cleanup_results
+        }
+
+    except Exception as e:
+        print(f"Error in cleanup: {str(e)}")
+        return {"error": str(e)}
 
 # Schedule periodic generation
 @app.on_after_configure.connect
