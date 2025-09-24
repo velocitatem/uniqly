@@ -8,7 +8,7 @@ Large Language Models suffer from repetitive outputs, missing the long tail of p
 
 ## How It Works
 <h3>Problem Formulation</h3>
-<p>We have a base model <img src="https://i.upmath.me/svg/F" alt="F" /> that maps input <img src="https://i.upmath.me/svg/X" alt="X" /> to a distribution over output space <img src="https://i.upmath.me/svg/Y" alt="Y" /> with probability mass function <img src="https://i.upmath.me/svg/p(y%5Cmid%20x)" alt="p(y\mid x)" />. The model $F$ is stochastic and black-box.</p>
+<p>We have a base model <img src="https://i.upmath.me/svg/F" alt="F" /> that maps input <img src="https://i.upmath.me/svg/X" alt="X" /> to a distribution over output space <img src="https://i.upmath.me/svg/Y" alt="Y" /> with probability mass function <img src="https://i.upmath.me/svg/p(y%5Cmid%20x)" alt="p(y\mid x)" />. The model <img src="https://i.upmath.me/svg/F" alt="F" /> is stochastic and black-box.</p>
 <p>At each step <img src="https://i.upmath.me/svg/t" alt="t" />, we want to select a subset <img src="https://i.upmath.me/svg/Y_t%3D%5C%7By%5E%7B(t)%7D_1%2C%5Cdots%2Cy%5E%7B(t)%7D_%7Bk_t%7D%5C%7D" alt="Y_t=\{y^{(t)}_1,\dots,y^{(t)}_{k_t}\}" /> with:</p>
 <ul>
 <li><strong>No repeats</strong> across all previous steps: <img src="https://i.upmath.me/svg/Y_t%20%5Ccap%20%5Cbigcup_%7Bi%3Ct%7D%20Y_i%3D%5Cvarnothing" alt="Y_t \cap \bigcup_{i&lt;t} Y_i=\varnothing" /></li>
@@ -18,13 +18,13 @@ Large Language Models suffer from repetitive outputs, missing the long tail of p
 <h3>Objective Function</h3>
 <p>We maximize a submodular coverage function:</p>
 <p align="center"><img align="center" src="https://i.upmath.me/svg/%5Cmax_%7BY_%7B1%3AT%7D%7D%20%5C%3B%20%5Cmathcal%7BC%7D%5C!%5Cleft(%5Cbigcup_%7Bt%3D1%7D%5ET%20Y_t%5Cright)%20%5Cquad%5Ctext%7Bsubject%20to%7D%5Cquad%20Y_t%20%5Ccap%20%5Cbigcup_%7Bi%3Ct%7D%20Y_i%3D%5Cvarnothing" alt="\max_{Y_{1:T}} \; \mathcal{C}\!\left(\bigcup_{t=1}^T Y_t\right) \quad\text{subject to}\quad Y_t \cap \bigcup_{i&lt;t} Y_i=\varnothing" /></p>
-<p>Where $\mathcal{C}$ represents cluster coverage, facility location, or rarity-weighted coverage bins.</p>
+<p>Where <img src="https://i.upmath.me/svg/%5Cmathcal%7BC%7D" alt="\mathcal{C}" /> represents cluster coverage, facility location, or rarity-weighted coverage bins.</p>
 <h3>Implementation Approach</h3>
 <p><strong>Current Implementation</strong> (OpenAI API):</p>
 <ol>
 <li><strong>High-Temperature Sampling</strong>: Use standard API with <code>temperature=1.2</code> and <code>top_p=0.95</code> for diversity</li>
 <li><strong>Multi-Round Generation</strong>: Generate multiple batches with different seeds for breadth</li>
-<li><strong>Hard Deduplication</strong>: Filter candidates using $\mathbf{1}[y\notin H]$ with canonicalized string matching</li>
+<li><strong>Hard Deduplication</strong>: Filter candidates using <img src="https://i.upmath.me/svg/%5Cmathbf%7B1%7D%5By%5Cnotin%20H%5D" alt="\mathbf{1}[y\notin H]" /> with canonicalized string matching</li>
 <li><strong>MMR Reranking</strong>: Apply post-generation scoring:
 <img src="https://i.upmath.me/svg/%5Ctext%7Bscore%7D%20%3D%20%5Clambda%20%5Ccdot%20%5Ctext%7Brelevance%7D%20-%20(1-%5Clambda)%20%5Ccdot%20%5Ctext%7Bsimilarity%5C_to%5C_history%7D%20%2B%20%5Calpha%20%5Ccdot%20%5Ctext%7Blogprob%7D%20%2B%20%5Cbeta%20%5Ccdot%20%5Ctext%7Brarity%7D" alt="\text{score} = \lambda \cdot \text{relevance} - (1-\lambda) \cdot \text{similarity\_to\_history} + \alpha \cdot \text{logprob} + \beta \cdot \text{rarity}" /></li>
 <li><strong>Top-k Selection</strong>: Select highest scoring unique candidates</li>
@@ -32,14 +32,7 @@ Large Language Models suffer from repetitive outputs, missing the long tail of p
 <p><strong>Future Implementation</strong> (Direct Sampling Control):
 For providers supporting custom sampling, we could implement the ideal <strong>time-varying reweighted distribution</strong>:</p>
 <p align="center"><img align="center" src="https://i.upmath.me/svg/%5Cpi_t(y)%20%5Cpropto%20%5Cmathbf%7B1%7D%5By%5Cnotin%20H%5D%20%5Ccdot%20p(y%5Cmid%20x)%5E%7B%5Calpha_t%7D%20%5Ccdot%20%5Cexp%5C!%5Cleft(-%5Clambda_t%20%5Cmax_%7Bs%5Cin%20H%7D%5Ctext%7Bsim%7D(y%2Cs)%20%2B%20%5Cbeta_t%20r_%7B%5Ctext%7Brare%7D%7D(y)%5Cright)" alt="\pi_t(y) \propto \mathbf{1}[y\notin H] \cdot p(y\mid x)^{\alpha_t} \cdot \exp\!\left(-\lambda_t \max_{s\in H}\text{sim}(y,s) + \beta_t r_{\text{rare}}(y)\right)" /></p>
-<p>Then sample $k_t$ items <strong>without replacement</strong> using Gumbel-Top-k or k-DPP.</p>
-
-
-### Core Algorithm
-- **Multi-Round Generation**: Generate diverse candidate batches with varying seeds
-- **Hard Deduplication**: Canonicalizes outputs and maintains persistent history $H$
-- **MMR Reranking**: Applies Maximum Marginal Relevance with embedding-based diversity scoring
-- **Structured Outputs**: Forces JSON schema compliance for consistent, parseable results
+<p>Then sample <img src="https://i.upmath.me/svg/k_t" alt="k_t" /> items <strong>without replacement</strong> using Gumbel-Top-k or k-DPP.</p>
 
 
 ## Key Features
