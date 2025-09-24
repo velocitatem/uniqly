@@ -18,21 +18,18 @@ jobs:
     - name: Copy files to deployment directory
       run: |
         # Create deployment directory if it doesn't exist
-        sudo -u runner mkdir -p /home/runner/infinite-generator
+        mkdir -p /home/runner/infinite-generator
 
         # Copy all files from workspace to deployment directory
-        sudo cp -r $GITHUB_WORKSPACE/* /home/runner/infinite-generator/ || true
-        sudo cp -r $GITHUB_WORKSPACE/.[^.]* /home/runner/infinite-generator/ 2>/dev/null || true
-
-        # Fix ownership
-        sudo chown -R runner:runner /home/runner/infinite-generator
+        cp -r $GITHUB_WORKSPACE/* /home/runner/infinite-generator/ || true
+        cp -r $GITHUB_WORKSPACE/.[^.]* /home/runner/infinite-generator/ 2>/dev/null || true
 
     - name: Create environment file
       run: |
         cd /home/runner/infinite-generator
 
         # Create .env file with deployment settings
-        sudo -u runner cat > .env << 'EOF'
+        cat > .env << 'EOF'
         NAME=infinite-gen
         COMPOSE_PROJECT_NAME=infinite-gen
 
@@ -61,17 +58,17 @@ jobs:
     - name: Stop existing containers
       run: |
         cd /home/runner/infinite-generator
-        sudo -u runner docker compose down redis worker infinite-api || true
+        docker compose down redis worker infinite-api || true
 
     - name: Pull latest images
       run: |
         cd /home/runner/infinite-generator
-        sudo -u runner docker compose pull redis || true
+        docker compose pull redis || true
 
     - name: Build and start infinite generator services
       run: |
         cd /home/runner/infinite-generator
-        sudo -u runner docker compose up -d --build redis worker infinite-api
+        docker compose up -d --build redis worker infinite-api
 
     - name: Wait for services to be ready
       run: |
@@ -81,7 +78,7 @@ jobs:
     - name: Check service health
       run: |
         cd /home/runner/infinite-generator
-        sudo -u runner docker compose ps
+        docker compose ps
 
         # Check if API is responding
         echo "Checking API health..."
@@ -115,4 +112,4 @@ jobs:
 
         cd /home/runner/infinite-generator
         echo "Running containers:"
-        sudo -u runner docker compose ps redis worker infinite-api
+        docker compose ps redis worker infinite-api
