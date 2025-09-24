@@ -18,11 +18,9 @@ export default function RootLayout({
     return (
         <html lang="en">
             <body className={`${fontVariables} antialiased`}>
-                <Header />
                 <main className="min-h-screen">
                     {children}
                 </main>
-                <Footer />
             </body>
         </html>
     );
