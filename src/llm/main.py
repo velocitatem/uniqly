@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate a varied set Y of 'date ideas in Madrid' using the OpenAI API.
+Generate a varied set of contextual suggestions using the OpenAI API.
 
 Features
 - Structured Outputs (JSON Schema) to force a list of strings
@@ -8,6 +8,7 @@ Features
 - Canonicalized hard de-duplication
 - Embedding-based MMR reranking for diversity vs. history
 - Deterministic option via `seed` (if supported by your model)
+- Configurable context for any type of suggestions
 
 Prereqs
   pip install openai numpy
@@ -17,6 +18,11 @@ Env
   # Optional overrides:
   export MODEL_CHAT=gpt-4o-mini-2024-07-18
   export MODEL_EMBED=text-embedding-3-small
+
+Usage:
+  python main.py "date ideas in Madrid"
+  python main.py "healthy breakfast recipes"
+  python main.py "creative writing prompts for sci-fi stories"
 """
 
 import os
@@ -33,16 +39,16 @@ MODEL_CHAT = os.getenv("MODEL_CHAT", "gpt-4o-mini-2024-07-18")
 MODEL_EMBED = os.getenv("MODEL_EMBED", "text-embedding-3-small")
 
 # Target size and batch settings
-TARGET_K = 40          # total unique ideas to emit
-ROUND_N = 8            # choices per API call (breadth)
+TARGET_K = 20 # total unique ideas to emit
+ROUND_N = 5            # choices per API call (breadth)
 MAX_ROUNDS = 20        # upper bound in case diversity is hard
 TEMPERATURE = 1.2
 TOP_P = 0.95
-USE_SEED = False       # set True if your chosen chat model supports seed
+USE_SEED = True # set True if your chosen chat model supports seed
 BASE_SEED = 12345
 
 # MMR / diversity knobs
-MMR_LAMBDA = 0.65      # higher favors novelty vs. relevance to prompt
+MMR_LAMBDA = 0.8      # higher favors novelty vs. relevance to prompt
 CHUNK_TOPK = 10        # pick up to this many per round after rerank
 
 client = OpenAI()
@@ -58,11 +64,11 @@ SCHEMA = {
                 "items": {
                     "type": "string",
                     "minLength": 3,
-                    "maxLength": 140
+                    "maxLength": 140 # expand for whatever longer context
                 },
                 "minItems": 8,
                 "maxItems": 32,
-                "description": "Distinct, concrete date ideas in Madrid, Spain."
+                "description": "Distinct, concrete suggestions for the given context."
             }
         },
         "required": ["candidates"],
@@ -70,22 +76,25 @@ SCHEMA = {
     },
 }
 
-SYSTEM_PROMPT = (
-    "You output only JSON that conforms to the provided JSON Schema. "
-    "Return diverse, specific date ideas in Madrid, Spain. "
-    "Each idea must be actionable, concrete, and distinct. "
-    "Avoid duplicates, near-duplicates, boilerplate, or generic advice. "
-    "Avoid numbered lists or extra narration. Strict JSON only."
-)
+def get_system_prompt(context: str) -> str:
+    return (
+        "You output only JSON that conforms to the provided JSON Schema. "
+        f"Return diverse, specific suggestions for: {context}. "
+        "Each suggestion must be actionable, concrete, and distinct. "
+        "Avoid duplicates, near-duplicates, boilerplate, or generic advice. "
+        "Avoid numbered lists or extra narration. Strict JSON only."
+    )
 
-USER_PROMPT_TEMPLATE = """\
-Task: propose fresh date ideas for Madrid.
+def get_user_prompt_template(context: str) -> str:
+    return f"""\
+Task: propose fresh suggestions for {context}.
 Constraints:
-- Focus on specific venues, neighborhoods, time windows, and twists (e.g., 'golden-hour rooftop at ... with ...', 'off-peak museum wing + tapas crawl in ...', 'night kayak on ... if seasonal', etc.).
-- Prefer affordable to mid-range. Include a few seasonal or time-bound picks.
+- Focus on specific, actionable, and detailed suggestions with relevant context and specifics.
+- Provide concrete, implementable ideas that are distinct from each other.
+- Include variety in approach, timing, or method where applicable.
 - Exclude anything already seen in the blocklist below.
-Blocklist (canonicalized, lowercase): {blocklist}
-Return 12–20 ideas.
+Blocklist (canonicalized, lowercase): {{blocklist}}
+Return 12–20 suggestions.
 """
 
 # ---------- Utilities ----------
@@ -168,7 +177,8 @@ def parse_candidates_from_choice(choice) -> List[str]:
         return []
 
 # ---------- Main generator ----------
-def generate_date_ideas_madrid(
+def generate_contextual_suggestions(
+    context: str,
     target_k: int = TARGET_K,
     round_n: int = ROUND_N,
     max_rounds: int = MAX_ROUNDS,
@@ -184,19 +194,22 @@ def generate_date_ideas_madrid(
     hist_vecs = np.zeros((0, 1536), dtype=np.float32)
 
     # Anchor: embed the task itself for a weak 'relevance' signal
-    anchor_text = "diverse concrete date ideas in Madrid, Spain with venues, times, seasonal twists"
+    anchor_text = f"diverse concrete suggestions for {context} with specific details and actionable advice"
     anchor_vec = embed([anchor_text])[0:1]
     if anchor_vec.shape[0] == 0:
         anchor_vec = None
 
+    user_prompt_template = get_user_prompt_template(context)
+    system_prompt = get_system_prompt(context)
+
     for t in range(max_rounds):
         blocklist = list(sorted(H_set))[:256]  # keep prompt short
-        user_prompt = USER_PROMPT_TEMPLATE.format(blocklist=blocklist)
+        user_prompt = user_prompt_template.format(blocklist=blocklist)
 
         params = dict(
             model=MODEL_CHAT,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_schema", "json_schema": SCHEMA},
@@ -247,17 +260,31 @@ def generate_date_ideas_madrid(
         if pick:
             hist_add = embed(pick)
             hist_vecs = np.vstack([hist_vecs, hist_add]) if hist_vecs.size else hist_add
+            print(f"Round {t+1}: got {len(raw)} raw, {len(fresh)} fresh, picked {len(pick)}, total {len(H_list)}")
+
 
         # Done?
         if len(H_list) >= target_k:
             return H_list[:target_k]
 
         # Small jitter to decorrelate successive rounds batch inference matters
-        time.sleep(0.2)
+        #time.sleep(0.1)
 
     return H_list[:target_k]
 
 # ---------- CLI ----------
 if __name__ == "__main__":
-    ideas = generate_date_ideas_madrid()
-    print(json.dumps({"date_ideas_madrid": ideas}, ensure_ascii=False, indent=2))
+    import sys
+
+    if len(sys.argv) > 1:
+        context = sys.argv[1]
+    else:
+        context = "date ideas in Madrid, Spain"  # default fallback
+
+    ideas = generate_contextual_suggestions(context)
+
+    # Create a clean key for the JSON output
+    key = context.lower().replace(" ", "_").replace(",", "").replace("'", "").replace('"', "")
+    key = ''.join(c for c in key if c.isalnum() or c == '_')
+
+    print(json.dumps({key: ideas}, ensure_ascii=False, indent=2))
