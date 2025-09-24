@@ -1,0 +1,118 @@
+name: Deploy Infinite Generator to VPS
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: # Allow manual triggers
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Copy files to deployment directory
+      run: |
+        # Create deployment directory if it doesn't exist
+        sudo -u runner mkdir -p /home/runner/infinite-generator
+
+        # Copy all files from workspace to deployment directory
+        sudo cp -r $GITHUB_WORKSPACE/* /home/runner/infinite-generator/ || true
+        sudo cp -r $GITHUB_WORKSPACE/.[^.]* /home/runner/infinite-generator/ 2>/dev/null || true
+
+        # Fix ownership
+        sudo chown -R runner:runner /home/runner/infinite-generator
+
+    - name: Create environment file
+      run: |
+        cd /home/runner/infinite-generator
+
+        # Create .env file with deployment settings
+        sudo -u runner cat > .env << 'EOF'
+        NAME=infinite-gen
+        COMPOSE_PROJECT_NAME=infinite-gen
+
+        # Backend Configuration
+        BACKEND_MODE=fastapi
+        BACKEND_PORT=9812
+
+        # Port Configuration
+        REDIS_PORT=6379
+
+        # Redis Configuration
+        REDIS_URL=redis://localhost:6379
+
+        # Infinite Generator Configuration
+        CONTEXT_X=Startup ideas in the AI space for the year twenty twenty six
+        CONTEXT_ID=ai-startup-2026
+        GENERATION_INTERVAL=3600
+        MAX_QUEUE_SIZE=1000
+
+        # OpenAI Configuration
+        OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+        MODEL_CHAT=gpt-4o-mini-2024-07-18
+        MODEL_EMBED=text-embedding-3-small
+        EOF
+
+    - name: Stop existing containers
+      run: |
+        cd /home/runner/infinite-generator
+        sudo -u runner docker compose down redis worker infinite-api || true
+
+    - name: Pull latest images
+      run: |
+        cd /home/runner/infinite-generator
+        sudo -u runner docker compose pull redis || true
+
+    - name: Build and start infinite generator services
+      run: |
+        cd /home/runner/infinite-generator
+        sudo -u runner docker compose up -d --build redis worker infinite-api
+
+    - name: Wait for services to be ready
+      run: |
+        echo "Waiting for services to start..."
+        sleep 45
+
+    - name: Check service health
+      run: |
+        cd /home/runner/infinite-generator
+        sudo -u runner docker compose ps
+
+        # Check if API is responding
+        echo "Checking API health..."
+        timeout 60 bash -c 'until curl -f http://localhost:9812/health 2>/dev/null; do sleep 2; done' || echo "API health check failed"
+
+        # Check API status
+        echo "Checking API status..."
+        curl -s http://localhost:9812/status | jq . || echo "Status endpoint failed"
+
+        # Trigger initial generation
+        echo "Triggering initial generation..."
+        curl -X POST http://localhost:9812/generate || echo "Generation trigger failed"
+
+    - name: Clean up old images
+      run: |
+        docker image prune -f || true
+
+    - name: Show deployment status
+      run: |
+        echo "Infinite Generator deployment completed!"
+        echo "API is available at: http://91.98.80.239:9812"
+        echo "API Docs: http://91.98.80.239:9812/docs"
+        echo "Context: Startup ideas in the AI space for the year twenty twenty six"
+        echo ""
+        echo "Available endpoints:"
+        echo "  GET /status - Check generation status"
+        echo "  GET /next/5 - Get next 5 suggestions from queue"
+        echo "  GET /random/3 - Get 3 random suggestions"
+        echo "  POST /generate - Manually trigger generation"
+        echo ""
+
+        cd /home/runner/infinite-generator
+        echo "Running containers:"
+        sudo -u runner docker compose ps redis worker infinite-api

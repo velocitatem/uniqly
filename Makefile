@@ -28,6 +28,19 @@ venv: ## Create the venv or show how to activate
 lift: ## Start all Docker services in detached mode
 	docker compose up -d
 
+lift-infinite: ## Start infinite generator services (worker + API + redis)
+	docker compose up -d redis worker infinite-api
+	@if [ -f .env ]; then \
+		export $$(grep -v '^#' .env | xargs); \
+		echo "Infinite Generator running at: http://localhost:$$BACKEND_PORT"; \
+		echo "API docs: http://localhost:$$BACKEND_PORT/docs"; \
+		echo "Context: $$CONTEXT_X"; \
+		echo "Generation interval: $${GENERATION_INTERVAL:-60}s"; \
+	else \
+		echo "Infinite Generator running at: http://localhost:9812"; \
+		echo "API docs: http://localhost:9812/docs"; \
+	fi
+
 lift-minio: ## Start all Docker services including MinIO in detached mode
 	docker compose --profile minio up -d
 
