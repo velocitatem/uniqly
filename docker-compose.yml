@@ -33,11 +33,37 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - PYTHONPATH=/app
+      - CONTEXT_X=${CONTEXT_X:-creative writing prompts for sci-fi stories}
+      - CONTEXT_ID=${CONTEXT_ID:-default}
+      - GENERATION_INTERVAL=${GENERATION_INTERVAL:-60}
+      - MAX_QUEUE_SIZE=${MAX_QUEUE_SIZE:-1000}
+      - LLM_SCRIPT_PATH=/app/src/llm/main.py
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MODEL_CHAT=${MODEL_CHAT:-gpt-4o-mini}
+      - MODEL_EMBED=${MODEL_EMBED:-text-embedding-3-small}
     volumes:
       - ./.env:/app/.env
     depends_on:
       - redis
-      - ml-inference
+    restart: unless-stopped
+
+  infinite-api:
+    container_name: "${NAME}-infinite-api"
+    build:
+      context: ./
+      dockerfile: ./docker/api.Dockerfile
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - CONTEXT_ID=${CONTEXT_ID:-default}
+      - CONTEXT_X=${CONTEXT_X:-creative writing prompts for sci-fi stories}
+      - BACKEND_PORT=${BACKEND_PORT:-9812}
+    ports:
+      - "${BACKEND_PORT:-9812}:${BACKEND_PORT:-9812}"
+    volumes:
+      - ./.env:/app/.env
+    depends_on:
+      - redis
+      - worker
     restart: unless-stopped
 
   minio:

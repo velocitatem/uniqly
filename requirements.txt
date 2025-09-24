@@ -15,4 +15,5 @@ scikit-learn
 pillow
 beautifulsoup4
 numpy
-colorsys
+redis
+openai
