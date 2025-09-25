@@ -22,6 +22,16 @@ app.add_middleware(
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
 r = redis.from_url(redis_url)
 
+def is_redis_read_only() -> bool:
+    """Check if Redis instance is in read-only mode (replica)"""
+    try:
+        info = r.info('replication')
+        role = info.get('role', 'master')
+        return role == 'slave'
+    except Exception:
+        # If we can't determine the role, assume it's writable to avoid breaking existing functionality
+        return False
+
 # Celery connection for triggering tasks
 celery_app = Celery('worker', broker=redis_url, backend=redis_url)
 
@@ -37,17 +47,44 @@ async def health():
     try:
         # Test Redis connection
         r.ping()
-        return {"status": "healthy", "redis": "connected"}
+        read_only = is_redis_read_only()
+        
+        return {
+            "status": "healthy", 
+            "redis": "connected",
+            "redis_read_only": read_only,
+            "redis_role": "replica" if read_only else "master"
+        }
     except Exception as e:
-        return {"status": "unhealthy", "redis": "disconnected", "error": str(e)}
+        return {
+            "status": "unhealthy", 
+            "redis": "disconnected", 
+            "error": str(e),
+            "redis_read_only": None
+        }
 
 @app.get("/next/{n}")
 async def get_next_suggestions(n: int = Path(..., ge=1, le=100, description="Number of suggestions to retrieve")):
     """Get next n suggestions from the FIFO queue"""
     try:
         queue_key = f"suggestions:queue:{CONTEXT_ID}"
-
-        # Get n items from the right side of the list (FIFO)
+        
+        # Check if Redis is read-only
+        if is_redis_read_only():
+            # Fallback to read-only operations - peek at suggestions without removing
+            suggestions = r.lrange(queue_key, -n, -1)
+            suggestions = [item.decode('utf-8') for item in reversed(suggestions)]
+            
+            return {
+                "suggestions": suggestions,
+                "count": len(suggestions),
+                "context_id": CONTEXT_ID,
+                "remaining_in_queue": r.llen(queue_key),
+                "warning": "Redis is in read-only mode. Suggestions were not removed from queue.",
+                "read_only_mode": True
+            }
+        
+        # Normal operation: Get n items from the right side of the list (FIFO)
         suggestions = []
         with r.pipeline() as pipe:
             for _ in range(n):
@@ -60,10 +97,32 @@ async def get_next_suggestions(n: int = Path(..., ge=1, le=100, description="Num
             "suggestions": suggestions,
             "count": len(suggestions),
             "context_id": CONTEXT_ID,
-            "remaining_in_queue": r.llen(queue_key)
+            "remaining_in_queue": r.llen(queue_key),
+            "read_only_mode": False
         }
 
     except Exception as e:
+        # Check if this is a read-only error
+        error_str = str(e)
+        if ("read only replica" in error_str.lower() or 
+            "readonly" in error_str.lower() or 
+            "read only" in error_str.lower()):
+            # Fallback to read-only operation
+            try:
+                suggestions = r.lrange(queue_key, -n, -1)
+                suggestions = [item.decode('utf-8') for item in reversed(suggestions)]
+                
+                return {
+                    "suggestions": suggestions,
+                    "count": len(suggestions),
+                    "context_id": CONTEXT_ID,
+                    "remaining_in_queue": r.llen(queue_key),
+                    "warning": f"Redis write operation failed ({error_str}). Suggestions were not removed from queue.",
+                    "read_only_mode": True
+                }
+            except Exception as fallback_error:
+                raise HTTPException(status_code=500, detail=f"Error in both write and read operations: {str(fallback_error)}")
+        
         raise HTTPException(status_code=500, detail=f"Error retrieving suggestions: {str(e)}")
 
 @app.get("/random/{n}")
@@ -130,8 +189,10 @@ async def get_status():
         try:
             r.ping()
             redis_status = "connected"
+            read_only = is_redis_read_only()
         except Exception as redis_error:
             redis_status = f"disconnected: {str(redis_error)}"
+            read_only = None
 
         return {
             "context_id": CONTEXT_ID,
@@ -142,6 +203,7 @@ async def get_status():
             "last_generation_timestamp": last_generation,
             "redis_url": redis_url,
             "redis_status": redis_status,
+            "redis_read_only": read_only,
             "healthy": redis_status == "connected"
         }
 
@@ -210,6 +272,13 @@ async def trigger_generation():
 async def clear_suggestions():
     """Clear all suggestions and start fresh (useful for testing or context changes)"""
     try:
+        # Check if Redis is read-only
+        if is_redis_read_only():
+            raise HTTPException(
+                status_code=403, 
+                detail="Cannot clear suggestions: Redis is in read-only mode (replica). This operation requires write access."
+            )
+            
         queue_key = f"suggestions:queue:{CONTEXT_ID}"
         all_key = f"suggestions:all:{CONTEXT_ID}"
         stats_key = f"stats:{CONTEXT_ID}"
@@ -228,7 +297,20 @@ async def clear_suggestions():
             "context_id": CONTEXT_ID
         }
 
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
+        # Check if this is a read-only error
+        error_str = str(e)
+        if ("read only replica" in error_str.lower() or 
+            "readonly" in error_str.lower() or 
+            "read only" in error_str.lower()):
+            raise HTTPException(
+                status_code=403, 
+                detail=f"Cannot clear suggestions: Redis is in read-only mode ({error_str}). This operation requires write access."
+            )
+        
         raise HTTPException(status_code=500, detail=f"Error clearing suggestions: {str(e)}")
 
 if __name__ == "__main__":
