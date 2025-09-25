@@ -8,8 +8,8 @@ import { Analytics } from "@vercel/analytics/next"
 const fontVariables = "font-sans";
 
 export const metadata: Metadata = {
-    title: "Ultiplate - Ultimate Boilerplate",
-    description: "AI-native template for any project with deployment ready setup",
+    title: "Uniqly",
+    description: "Unique streams of inteligence tailored to your demands.",
 };
 
 export default function RootLayout({
