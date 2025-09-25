@@ -4,10 +4,10 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:9812';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { slug: string; count: string } }
+  { params }: { params: Promise<{ slug: string; count: string }> }
 ) {
   try {
-    const { slug, count } = params;
+    const { slug, count } = await params;
 
     const response = await fetch(`${BACKEND_URL}/contexts/${slug}/next/${count}`);
 
