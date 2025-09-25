@@ -93,7 +93,6 @@ jobs:
 
         # Trigger initial generation
         echo "Triggering initial generation..."
-        curl -X POST http://localhost:9812/generate || echo "Generation trigger failed"
 
     - name: Clean up old images
       run: |
@@ -102,8 +101,6 @@ jobs:
     - name: Show deployment status
       run: |
         echo "Infinite Generator deployment completed!"
-        echo "API is available at: http://91.98.80.239:9812"
-        echo "API Docs: http://91.98.80.239:9812/docs"
         echo "Context: Startup ideas in the AI space for the year twenty twenty six"
         echo ""
         echo "Available endpoints:"
