@@ -6,7 +6,16 @@ services:
       - "${REDIS_PORT}:6379"
     volumes:
       - redis_data:/data
+      - ./docker/redis.conf:/etc/redis/redis.conf:ro
     restart: unless-stopped
+    command: redis-server /etc/redis/redis.conf
+    environment:
+      - REDIS_REPLICATION_MODE=master
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   ml-inference:
     container_name: "${NAME}-mlinfer"
@@ -31,7 +40,7 @@ services:
       context: ./
       dockerfile: ./docker/worker.Dockerfile
     environment:
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://redis:6379/0
       - PYTHONPATH=/app
       - CONTEXT_X=${CONTEXT_X:-creative writing prompts for sci-fi stories}
       - CONTEXT_ID=${CONTEXT_ID:-default}
@@ -44,7 +53,8 @@ services:
     volumes:
       - ./.env:/app/.env
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   infinite-api:
@@ -53,7 +63,7 @@ services:
       context: ./
       dockerfile: ./docker/api.Dockerfile
     environment:
-      - REDIS_URL=redis://redis:6379
+      - REDIS_URL=redis://redis:6379/0
       - CONTEXT_ID=${CONTEXT_ID:-default}
       - CONTEXT_X=${CONTEXT_X:-creative writing prompts for sci-fi stories}
       - BACKEND_PORT=${BACKEND_PORT:-9812}
@@ -62,8 +72,10 @@ services:
     volumes:
       - ./.env:/app/.env
     depends_on:
-      - redis
-      - worker
+      redis:
+        condition: service_healthy
+      worker:
+        condition: service_started
     restart: unless-stopped
 
   minio:

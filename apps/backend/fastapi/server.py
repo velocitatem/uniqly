@@ -20,45 +20,13 @@ app.add_middleware(
 
 # Redis connection
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-
-# Configure Redis connection to ensure we connect to a writable instance
-# Add connection parameters to avoid read-only replicas
-redis_connection_kwargs = {
-    'decode_responses': False,  # Keep binary for consistency
-    'socket_connect_timeout': 5,
-    'socket_timeout': 5,
-    'retry_on_timeout': True,
-    'health_check_interval': 30,
-}
-
-# Parse the Redis URL and add additional parameters if needed
-if redis_url.startswith('redis://'):
-    # For standard Redis connections, add parameters to prefer master
-    r = redis.from_url(redis_url, **redis_connection_kwargs)
-else:
-    # For Redis cluster or other configurations, use basic connection
-    r = redis.from_url(redis_url)
+r = redis.from_url(redis_url)
 
 # Celery connection for triggering tasks
 celery_app = Celery('worker', broker=redis_url, backend=redis_url)
 
 # Configuration
 CONTEXT_ID = os.getenv("CONTEXT_ID", "default")
-
-def is_redis_writable():
-    """Check if Redis connection is writable (not a read-only replica)"""
-    try:
-        # Try to perform a simple write operation
-        test_key = f"test:write:check:{CONTEXT_ID}"
-        r.set(test_key, "test", ex=1)  # Set with 1 second expiration
-        r.delete(test_key)  # Clean up immediately
-        return True
-    except Exception as e:
-        error_msg = str(e).lower()
-        if "read only" in error_msg or "readonly" in error_msg:
-            return False
-        # For other errors, assume it's writable but log the issue
-        return True
 
 class ConfigUpdate(BaseModel):
     context: str
@@ -69,38 +37,15 @@ async def health():
     try:
         # Test Redis connection
         r.ping()
-        redis_status = "connected"
-        
-        # Check if Redis is writable
-        writable = is_redis_writable()
-        redis_mode = "writable" if writable else "read-only"
-        
-        return {
-            "status": "healthy" if writable else "degraded",
-            "redis": redis_status,
-            "redis_mode": redis_mode,
-            "write_operations": "enabled" if writable else "disabled"
-        }
+        return {"status": "healthy", "redis": "connected"}
     except Exception as e:
-        return {
-            "status": "unhealthy", 
-            "redis": "disconnected", 
-            "redis_mode": "unknown",
-            "error": str(e)
-        }
+        return {"status": "unhealthy", "redis": "disconnected", "error": str(e)}
 
 @app.get("/next/{n}")
 async def get_next_suggestions(n: int = Path(..., ge=1, le=100, description="Number of suggestions to retrieve")):
     """Get next n suggestions from the FIFO queue"""
     try:
         queue_key = f"suggestions:queue:{CONTEXT_ID}"
-
-        # Check if Redis is writable before attempting write operations
-        if not is_redis_writable():
-            raise HTTPException(
-                status_code=503, 
-                detail="Service temporarily unavailable: Redis is in read-only mode. Cannot pop items from queue."
-            )
 
         # Get n items from the right side of the list (FIFO)
         suggestions = []
@@ -118,19 +63,8 @@ async def get_next_suggestions(n: int = Path(..., ge=1, le=100, description="Num
             "remaining_in_queue": r.llen(queue_key)
         }
 
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
     except Exception as e:
-        # Check if the error is related to read-only Redis
-        error_msg = str(e).lower()
-        if "read only" in error_msg or "readonly" in error_msg:
-            raise HTTPException(
-                status_code=503, 
-                detail="Service temporarily unavailable: Connected to read-only Redis replica. Cannot modify queue."
-            )
-        else:
-            raise HTTPException(status_code=500, detail=f"Error retrieving suggestions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving suggestions: {str(e)}")
 
 @app.get("/random/{n}")
 async def get_random_suggestions(n: int = Path(..., ge=1, le=100, description="Number of random suggestions to retrieve")):
@@ -192,16 +126,12 @@ async def get_status():
         # Get context info
         context_x = os.getenv("CONTEXT_X", "Not configured")
 
-        # Test Redis connection and check write capabilities
+        # Test Redis connection
         try:
             r.ping()
             redis_status = "connected"
-            writable = is_redis_writable()
-            redis_mode = "writable" if writable else "read-only"
         except Exception as redis_error:
             redis_status = f"disconnected: {str(redis_error)}"
-            redis_mode = "unknown"
-            writable = False
 
         return {
             "context_id": CONTEXT_ID,
@@ -212,9 +142,7 @@ async def get_status():
             "last_generation_timestamp": last_generation,
             "redis_url": redis_url,
             "redis_status": redis_status,
-            "redis_mode": redis_mode,
-            "write_operations_enabled": writable,
-            "healthy": redis_status == "connected" and writable
+            "healthy": redis_status == "connected"
         }
 
     except Exception as e:
@@ -282,13 +210,6 @@ async def trigger_generation():
 async def clear_suggestions():
     """Clear all suggestions and start fresh (useful for testing or context changes)"""
     try:
-        # Check if Redis is writable before attempting write operations
-        if not is_redis_writable():
-            raise HTTPException(
-                status_code=503, 
-                detail="Service temporarily unavailable: Redis is in read-only mode. Cannot clear suggestions."
-            )
-
         queue_key = f"suggestions:queue:{CONTEXT_ID}"
         all_key = f"suggestions:all:{CONTEXT_ID}"
         stats_key = f"stats:{CONTEXT_ID}"
@@ -307,19 +228,8 @@ async def clear_suggestions():
             "context_id": CONTEXT_ID
         }
 
-    except HTTPException:
-        # Re-raise HTTP exceptions as-is
-        raise
     except Exception as e:
-        # Check if the error is related to read-only Redis
-        error_msg = str(e).lower()
-        if "read only" in error_msg or "readonly" in error_msg:
-            raise HTTPException(
-                status_code=503, 
-                detail="Service temporarily unavailable: Connected to read-only Redis replica. Cannot clear suggestions."
-            )
-        else:
-            raise HTTPException(status_code=500, detail=f"Error clearing suggestions: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error clearing suggestions: {str(e)}")
 
 if __name__ == "__main__":
     PORT = int(os.getenv("BACKEND_PORT", 9812))
