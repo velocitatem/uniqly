@@ -3,6 +3,9 @@ name: Deploy Infinite Generator to VPS
 on:
   push:
     branches: [ main ]
+    paths:
+      - 'apps/worker/**'
+      - 'apps/backend/**'
   workflow_dispatch: # Allow manual triggers
 
 jobs:
